@@ -1,0 +1,265 @@
+import asyncio
+import itertools
+import logging
+import uuid
+from typing import Any, Union
+
+import msgpack
+from channels.exceptions import StopConsumer
+from channels.layers import BaseChannelLayer
+from kafka import KafkaAdminClient
+from kafka.admin.new_topic import NewTopic
+from kafka.consumer import KafkaConsumer
+from kafka.errors import KafkaConnectionError
+from kafka.producer import KafkaProducer
+from kafka.util import KafkaTimeoutError
+
+from channels_kafka.multiqueue import MultiQueue
+from channels_kafka.util import (
+    ChannelRecipient,
+    GroupRecipient,
+    deserialize_message,
+    serialize_message,
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def _poll_new_records(
+    consumer: KafkaConsumer,
+    timeout: int,
+    polling_error: asyncio.Event,
+    queue: MultiQueue,
+):
+    try:
+        while True:
+            time = asyncio.get_running_loop().time()
+            records = await asyncio.to_thread(consumer.poll, timeout)
+            for partition in itertools.chain(records.values()):
+                for record in partition:
+                    recipient, data = deserialize_message(record.value)
+                    logger.debug("%s received data: %s", recipient, data)
+                    queue.put_nowait(recipient, data, time, lambda: None)
+            consumer.commit()
+    except Exception as ex:
+        logger.exception(ex)
+        polling_error.set()
+        raise
+
+
+class KafkaChannelLayer(BaseChannelLayer):
+    extensions = ["groups"]
+
+    def __init__(
+        self,
+        hosts: list[str] | None = None,
+        client_id: str = "asgi",
+        group_id: str = "django_channels_group",
+        topic: str = "django_channels",
+        max_size: int = 100,
+    ):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            raise RuntimeError(
+                "Refusing to initialize channel layer without a running event loop."
+            )
+
+        self.hosts = hosts if hosts else ["localhost:9092"]
+        self.client_id = client_id
+        self.group_id = group_id
+        self.topic = topic
+        self._queue = MultiQueue(max_size)
+        self.timeout = 1000
+
+        self._closed = asyncio.Event()
+        self._polling_error = asyncio.Event()
+        self._want_close = False
+
+        self._producer_future, self._consumer_future, self._admin_future = (
+            asyncio.Future[KafkaProducer](),
+            asyncio.Future[KafkaConsumer](),
+            asyncio.Future[KafkaAdminClient](),
+        )
+
+        asyncio.create_task(self.admin)
+
+        self.EXPECTED_EXCEPTIONS = (KafkaTimeoutError, KafkaConnectionError, OSError)
+
+    async def _reconnect_forever(self, *, producer=False, consumer=False, admin=False):
+        assert sum((producer, consumer, admin)) == 1
+        instance = "producer" if producer else ("consumer" if consumer else "admin")
+        future = f"_{instance}_future"
+        connection = None
+        logger.warning("%s instance to be run", instance)
+        while not self._want_close:
+            while not self._want_close:
+                try:
+                    connection = getattr(self, f"_get_{instance}")()
+                except self.EXPECTED_EXCEPTIONS:
+                    logger.warning(
+                        "Retrying connecting to %s at %s", instance, self.hosts
+                    )
+                    await asyncio.sleep(1)
+                    continue
+                if admin:
+                    try:
+                        connection.create_topics(
+                            [NewTopic(self.topic, 1, 1)], validate_only=True
+                        )
+                    except self.EXPECTED_EXCEPTIONS:
+                        logger.warning("Dropped connection to admin at %s", self.hosts)
+                        connection = None
+                        await asyncio.sleep(1)
+                        continue
+
+                if self._want_close:
+                    break
+
+                getattr(self, future).set_result(connection)
+                logger.debug("%s connected to Kafka", instance)
+                break
+
+            try:
+                if consumer:
+                    await _poll_new_records(
+                        await self.consumer,
+                        self.timeout,
+                        self._polling_error,
+                        self._queue,
+                    )
+                    await self._closed.wait()
+                else:
+                    close_task = asyncio.create_task(self._closed.wait())
+                    polling_error_task = asyncio.create_task(self._polling_error.wait())
+                    await asyncio.wait(
+                        {close_task, polling_error_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    self._polling_error.clear()
+            except self.EXPECTED_EXCEPTIONS as ex:
+                logger.warning(
+                    "Disconnected %s from Kafka: %s. Will reconnect.", instance, str(ex)
+                )
+
+        try:
+            await self.close()
+        except self.EXPECTED_EXCEPTIONS:
+            pass
+
+        if connection is not None and not self._closed.is_set():
+            self._closed.set()
+            await self.close()
+
+    def _get_producer(self):
+        return KafkaProducer(
+            bootstrap_servers=self.hosts,
+            client_id=self.client_id,
+            enable_idempotence=True,
+            max_in_flight_requests_per_connection=1,
+            acks="all",
+            value_serializer=msgpack.dumps,
+        )
+
+    def _get_consumer(self):
+        return KafkaConsumer(
+            self.topic,
+            bootstrap_servers=self.hosts,
+            client_id=self.client_id,
+            group_id=self.group_id,
+            value_deserializer=msgpack.unpackb,
+        )
+
+    def _get_admin(self):
+        return KafkaAdminClient(
+            bootstrap_servers=self.hosts,
+            client_id=self.client_id,
+        )
+
+    @property
+    async def producer(self):
+        if self._producer_future.done():
+            return self._producer_future.result()
+        self.kafka_connection(producer=True)
+        return await self._producer_future
+
+    @property
+    async def consumer(self):
+        if self._consumer_future.done():
+            return self._consumer_future.result()
+        self.kafka_connection(consumer=True)
+        return await self._consumer_future
+
+    @property
+    async def admin(self):
+        if self._admin_future.done():
+            return self._admin_future.result()
+        self.kafka_connection(admin=True)
+        return await self._admin_future
+
+    def kafka_connection(self, *, consumer=False, producer=False, admin=False):
+        assert sum([consumer, producer, admin]) == 1
+        if self._want_close:
+            raise StopConsumer
+        instance = "consumer" if consumer else "admin" if admin else "producer"
+        reconnect_task_name = f"_{instance}_reconnect_forever_task"
+        if not hasattr(self, reconnect_task_name):
+            logger.warning(reconnect_task_name)
+            setattr(
+                self,
+                reconnect_task_name,
+                asyncio.create_task(
+                    self._reconnect_forever(
+                        producer=producer, consumer=consumer, admin=admin
+                    ),
+                    name=f"Create {instance} task",
+                ),
+            )
+
+    async def send(self, channel: str, message: dict) -> None:
+        assert self.valid_channel_name(channel), "Invalid channel name"
+        producer = await self.producer
+        record = serialize_message(ChannelRecipient(channel), message)
+        assert isinstance(channel, str)
+        logger.debug("channel sending record %s to %s", record, channel)
+        producer.send(self.topic, record, bytes(channel, encoding="utf-8"))
+        logger.debug("channel sent record %s to %s", record, channel)
+
+    async def group_add(self, group, channel):
+        self._queue.group_add(group, channel)
+
+    async def group_discard(self, group, channel):
+        self._queue.group_discard(group, channel)
+
+    async def group_send(self, group: str, message: dict):
+        producer = await self.producer
+        assert isinstance(group, str)
+        record = serialize_message(GroupRecipient(group), message)
+        logger.debug("group sending record %s to %s", record, group)
+        producer.send(self.topic, record, bytes(group, encoding="utf-8"))
+        logger.debug("group sent record %s to %s", record, group)
+
+    async def receive(self, channel: str) -> Any:
+        logger.warning("receive %s channel", channel)
+        assert self.valid_channel_name(channel), "Invalid channel name"
+        await self.consumer
+        logger.debug("waiting for channel %s", channel)
+        msg = await self._queue.get(channel)
+        logger.debug("received %s for channel %s", msg, channel)
+        return msg
+
+    async def new_channel(self):
+        return self.client_id + str(uuid.uuid1())
+
+    async def close(self):
+        poll_task = getattr(self, "_poll_new_records_task")
+        self._want_close = True
+        if poll_task:
+            poll_task.cancel()
+        self._closed.set()
+        for name in ("producer", "consumer", "admin"):
+            instance: asyncio.Future[
+                Union[KafkaProducer, KafkaConsumer, KafkaAdminClient]
+            ] = getattr(self, f"_{name}_future")
+            if instance and instance.done():
+                instance.result().close()
