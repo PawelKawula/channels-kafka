@@ -183,12 +183,17 @@ dependencies = [
     { name = "aiokafka", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "aiokafka", version = "0.12.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "channels" },
-    { name = "kafka-python" },
     { name = "msgpack" },
+]
+
+[package.optional-dependencies]
+flush = [
+    { name = "kafka-python" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "kafka-python" },
     { name = "pre-commit", version = "3.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pre-commit", version = "4.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "pytest" },
@@ -202,12 +207,14 @@ dev = [
 requires-dist = [
     { name = "aiokafka", specifier = ">=0.11.0" },
     { name = "channels", specifier = ">=3,<5" },
-    { name = "kafka-python", specifier = ">=2.2.15" },
+    { name = "kafka-python", marker = "extra == 'flush'", specifier = ">=2.2.15" },
     { name = "msgpack", specifier = ">=1.1.0" },
 ]
+provides-extras = ["flush"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "kafka-python", specifier = ">=2.2.15" },
     { name = "pre-commit", specifier = ">=3.5.0" },
     { name = "pytest", specifier = ">=8.3.5" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
