@@ -1,18 +1,14 @@
 import asyncio
-import itertools
+import importlib.util
 import logging
 import uuid
 from typing import Any, Union
 
 import msgpack
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from aiokafka.errors import KafkaConnectionError, KafkaTimeoutError
 from channels.exceptions import StopConsumer
 from channels.layers import BaseChannelLayer
-from kafka import KafkaAdminClient
-from kafka.admin.new_topic import NewTopic
-from kafka.consumer import KafkaConsumer
-from kafka.errors import KafkaConnectionError
-from kafka.producer import KafkaProducer
-from kafka.util import KafkaTimeoutError
 
 from channels_kafka.multiqueue import MultiQueue
 from channels_kafka.util import (
@@ -26,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _poll_new_records(
-    consumer: KafkaConsumer,
+    consumer: AIOKafkaConsumer,
     timeout: int,
     polling_error: asyncio.Event,
     queue: MultiQueue,
@@ -34,13 +30,10 @@ async def _poll_new_records(
     try:
         while True:
             time = asyncio.get_running_loop().time()
-            records = await asyncio.to_thread(consumer.poll, timeout)
-            for partition in itertools.chain(records.values()):
-                for record in partition:
-                    recipient, data = deserialize_message(record.value)
-                    logger.debug("%s received data: %s", recipient, data)
-                    queue.put_nowait(recipient, data, time, lambda: None)
-            consumer.commit()
+            async for record in consumer:
+                recipient, data = deserialize_message(record.value)
+                logger.debug("%s received data: %s", recipient, data)
+                queue.put_nowait(recipient, data, time, lambda: None)
     except Exception as ex:
         logger.exception(ex)
         polling_error.set()
@@ -77,12 +70,13 @@ class KafkaChannelLayer(BaseChannelLayer):
         self._want_close = False
 
         self._producer_future, self._consumer_future, self._admin_future = (
-            asyncio.Future[KafkaProducer](),
-            asyncio.Future[KafkaConsumer](),
-            asyncio.Future[KafkaAdminClient](),
+            asyncio.Future[AIOKafkaProducer](),
+            asyncio.Future[AIOKafkaConsumer](),
+            asyncio.Future(),
         )
 
-        asyncio.create_task(self.admin)
+        if importlib.util.find_spec("kafka-python"):
+            asyncio.create_task(self.admin)
 
         self.EXPECTED_EXCEPTIONS = (KafkaTimeoutError, KafkaConnectionError, OSError)
 
@@ -104,9 +98,13 @@ class KafkaChannelLayer(BaseChannelLayer):
                     continue
                 if admin:
                     try:
-                        connection.create_topics(
-                            [NewTopic(self.topic, 1, 1)], validate_only=True
-                        )
+                        from kafka.admin import NewTopic
+
+                        logger.error(connection.list_topics())
+                        if self.topic not in connection.list_topics():
+                            connection.create_topics(
+                                [NewTopic(self.topic, 1, 1)], validate_only=True
+                            )
                     except self.EXPECTED_EXCEPTIONS:
                         logger.warning("Dropped connection to admin at %s", self.hosts)
                         connection = None
@@ -121,6 +119,8 @@ class KafkaChannelLayer(BaseChannelLayer):
                 break
 
             try:
+                if not admin:
+                    await connection.start()
                 if consumer:
                     await _poll_new_records(
                         await self.consumer,
@@ -152,29 +152,33 @@ class KafkaChannelLayer(BaseChannelLayer):
             await self.close()
 
     def _get_producer(self):
-        return KafkaProducer(
-            bootstrap_servers=self.hosts,
+        return AIOKafkaProducer(
+            bootstrap_servers=",".join(self.hosts),
             client_id=self.client_id,
             enable_idempotence=True,
-            max_in_flight_requests_per_connection=1,
             acks="all",
             value_serializer=msgpack.dumps,
         )
 
     def _get_consumer(self):
-        return KafkaConsumer(
+        return AIOKafkaConsumer(
             self.topic,
-            bootstrap_servers=self.hosts,
+            bootstrap_servers=",".join(self.hosts),
             client_id=self.client_id,
             group_id=self.group_id,
             value_deserializer=msgpack.unpackb,
         )
 
     def _get_admin(self):
-        return KafkaAdminClient(
-            bootstrap_servers=self.hosts,
-            client_id=self.client_id,
-        )
+        try:
+            from kafka import KafkaAdminClient
+
+            return KafkaAdminClient(
+                bootstrap_servers=self.hosts,
+                client_id=self.client_id,
+            )
+        except ModuleNotFoundError:
+            raise NotImplementedError("Admin is not available without 'flush' feature")
 
     @property
     async def producer(self):
@@ -217,12 +221,16 @@ class KafkaChannelLayer(BaseChannelLayer):
             )
 
     async def send(self, channel: str, message: dict) -> None:
+        if importlib.util.find_spec("kafka-python"):
+            await self.admin
         assert self.valid_channel_name(channel), "Invalid channel name"
         producer = await self.producer
         record = serialize_message(ChannelRecipient(channel), message)
         assert isinstance(channel, str)
         logger.debug("channel sending record %s to %s", record, channel)
-        producer.send(self.topic, record, bytes(channel, encoding="utf-8"))
+        await producer.send_and_wait(
+            self.topic, record, bytes(channel, encoding="utf-8")
+        )
         logger.debug("channel sent record %s to %s", record, channel)
 
     async def group_add(self, group, channel):
@@ -232,16 +240,20 @@ class KafkaChannelLayer(BaseChannelLayer):
         self._queue.group_discard(group, channel)
 
     async def group_send(self, group: str, message: dict):
+        if importlib.util.find_spec("kafka-python"):
+            await self.admin
         producer = await self.producer
         assert isinstance(group, str)
         record = serialize_message(GroupRecipient(group), message)
         logger.debug("group sending record %s to %s", record, group)
-        producer.send(self.topic, record, bytes(group, encoding="utf-8"))
+        await producer.send_and_wait(self.topic, record, bytes(group, encoding="utf-8"))
         logger.debug("group sent record %s to %s", record, group)
 
     async def receive(self, channel: str) -> Any:
-        logger.warning("receive %s channel", channel)
+        if importlib.util.find_spec("kafka-python"):
+            await self.admin
         assert self.valid_channel_name(channel), "Invalid channel name"
+        logger.warning("receive %s channel", channel)
         await self.consumer
         logger.debug("waiting for channel %s", channel)
         msg = await self._queue.get(channel)
@@ -251,15 +263,28 @@ class KafkaChannelLayer(BaseChannelLayer):
     async def new_channel(self):
         return self.client_id + str(uuid.uuid1())
 
+    async def flush(self):
+        if not importlib.util.find_spec("kafka-python"):
+            raise NotImplementedError("Flush is not available without 'flush' feature")
+
+        admin = await self.admin
+        admin.delete_topics([self.topic], timeout_ms=5_000)
+
     async def close(self):
-        poll_task = getattr(self, "_poll_new_records_task")
+        poll_task = getattr(self, "_poll_new_records_task", None)
         self._want_close = True
         if poll_task:
             poll_task.cancel()
         self._closed.set()
-        for name in ("producer", "consumer", "admin"):
-            instance: asyncio.Future[
-                Union[KafkaProducer, KafkaConsumer, KafkaAdminClient]
-            ] = getattr(self, f"_{name}_future")
+        for name in ("producer", "consumer"):
+            instance: asyncio.Future[Union[AIOKafkaProducer, AIOKafkaConsumer]] = (
+                getattr(self, f"_{name}_future")
+            )
             if instance and instance.done():
-                instance.result().close()
+                await instance.result().stop()
+        try:
+            admin = self._admin_future
+            if admin and admin.done():
+                admin.result().close()
+        except ModuleNotFoundError:
+            pass
