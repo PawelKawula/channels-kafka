@@ -75,7 +75,7 @@ class KafkaChannelLayer(BaseChannelLayer):
             asyncio.Future(),
         )
 
-        if importlib.util.find_spec("kafka-python"):
+        if importlib.util.find_spec("kafka"):
             asyncio.create_task(self.admin)
 
         self.EXPECTED_EXCEPTIONS = (KafkaTimeoutError, KafkaConnectionError, OSError)
@@ -221,7 +221,7 @@ class KafkaChannelLayer(BaseChannelLayer):
             )
 
     async def send(self, channel: str, message: dict) -> None:
-        if importlib.util.find_spec("kafka-python"):
+        if importlib.util.find_spec("kafka"):
             await self.admin
         assert self.valid_channel_name(channel), "Invalid channel name"
         producer = await self.producer
@@ -240,7 +240,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         self._queue.group_discard(group, channel)
 
     async def group_send(self, group: str, message: dict):
-        if importlib.util.find_spec("kafka-python"):
+        if importlib.util.find_spec("kafka"):
             await self.admin
         producer = await self.producer
         assert isinstance(group, str)
@@ -250,7 +250,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         logger.debug("group sent record %s to %s", record, group)
 
     async def receive(self, channel: str) -> Any:
-        if importlib.util.find_spec("kafka-python"):
+        if importlib.util.find_spec("kafka"):
             await self.admin
         assert self.valid_channel_name(channel), "Invalid channel name"
         logger.warning("receive %s channel", channel)
@@ -264,7 +264,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         return self.client_id + str(uuid.uuid1())
 
     async def flush(self):
-        if not importlib.util.find_spec("kafka-python"):
+        if not importlib.util.find_spec("kafka"):
             raise NotImplementedError("Flush is not available without 'flush' feature")
 
         admin = await self.admin

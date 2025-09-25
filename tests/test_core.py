@@ -42,7 +42,7 @@ async def layer():
         if layer:
             try:
                 async with asyncio.timeout(TIMEOUT):
-                    await layer.flush()
+                    # await layer.flush()
                     await layer.close()
             except:
                 logger.error(
