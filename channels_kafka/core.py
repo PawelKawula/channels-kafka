@@ -228,9 +228,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         record = serialize_message(ChannelRecipient(channel), message)
         assert isinstance(channel, str)
         logger.debug("channel sending record %s to %s", record, channel)
-        await producer.send_and_wait(
-            self.topic, record, bytes(channel, encoding="utf-8")
-        )
+        await producer.send_and_wait(self.topic, record)
         logger.debug("channel sent record %s to %s", record, channel)
 
     async def group_add(self, group, channel):
@@ -246,7 +244,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         assert isinstance(group, str)
         record = serialize_message(GroupRecipient(group), message)
         logger.debug("group sending record %s to %s", record, group)
-        await producer.send_and_wait(self.topic, record, bytes(group, encoding="utf-8"))
+        await producer.send_and_wait(self.topic, record)
         logger.debug("group sent record %s to %s", record, group)
 
     async def receive(self, channel: str) -> Any:
