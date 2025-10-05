@@ -1,12 +1,16 @@
 import asyncio
-import importlib.util
 import logging
 import uuid
+from collections import defaultdict
 from typing import Any, Union
 
 import msgpack
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
-from aiokafka.errors import KafkaConnectionError, KafkaTimeoutError
+from aiokafka.errors import (
+    GroupCoordinatorNotAvailableError,
+    KafkaConnectionError,
+    KafkaTimeoutError,
+)
 from channels.exceptions import StopConsumer
 from channels.layers import BaseChannelLayer
 
@@ -58,6 +62,7 @@ class KafkaChannelLayer(BaseChannelLayer):
                 "Refusing to initialize channel layer without a running event loop."
             )
 
+        self.dct = defaultdict(int)
         self.hosts = hosts if hosts else ["localhost:9092"]
         self.client_id = client_id
         self.group_id = group_id
@@ -75,21 +80,18 @@ class KafkaChannelLayer(BaseChannelLayer):
             asyncio.Future(),
         )
 
-        if importlib.util.find_spec("aafka"):
-            asyncio.create_task(self.admin)
-
         self.EXPECTED_EXCEPTIONS = (KafkaTimeoutError, KafkaConnectionError, OSError)
 
     async def _reconnect_forever(self, *, producer=False, consumer=False, admin=False):
         assert sum((producer, consumer, admin)) == 1
         instance = "producer" if producer else ("consumer" if consumer else "admin")
-        future = f"_{instance}_future"
+        future_name = f"_{instance}_future"
         connection = None
         logger.warning("%s instance to be run", instance)
         while not self._want_close:
             while not self._want_close:
                 try:
-                    connection = getattr(self, f"_get_{instance}")()
+                    connection = await getattr(self, f"_get_{instance}")()
                 except self.EXPECTED_EXCEPTIONS:
                     logger.warning(
                         "Retrying connecting to %s at %s", instance, self.hosts
@@ -114,13 +116,28 @@ class KafkaChannelLayer(BaseChannelLayer):
                 if self._want_close:
                     break
 
-                getattr(self, future).set_result(connection)
-                logger.debug("%s connected to Kafka", instance)
                 break
+            logger.warning(connection)
 
             try:
                 if not admin:
-                    await connection.start()
+                    retries = 3
+                    for i in range(1, retries + 1):
+                        try:
+                            await connection.start()
+                            future = getattr(self, future_name)
+                            if not future.done():
+                                future.set_result(connection)
+                            logger.debug("%s connected to Kafka", instance)
+                            break
+                        except GroupCoordinatorNotAvailableError:
+                            if i != 2:
+                                logger.error(
+                                    f"Retrying connecting consumer since group coordinator not available...({i}/{retries})"
+                                )
+                                await asyncio.sleep(2)
+                            else:
+                                continue
                 if consumer:
                     await _poll_new_records(
                         await self.consumer,
@@ -138,9 +155,16 @@ class KafkaChannelLayer(BaseChannelLayer):
                     )
                     self._polling_error.clear()
             except self.EXPECTED_EXCEPTIONS as ex:
+                try:
+                    connection.stop()
+                    connection.close()
+                except Exception:
+                    pass
                 logger.warning(
                     "Disconnected %s from Kafka: %s. Will reconnect.", instance, str(ex)
                 )
+                await asyncio.sleep(2)
+                continue
 
         try:
             await self.close()
@@ -151,25 +175,43 @@ class KafkaChannelLayer(BaseChannelLayer):
             self._closed.set()
             await self.close()
 
-    def _get_producer(self):
-        return AIOKafkaProducer(
-            bootstrap_servers=",".join(self.hosts),
-            client_id=self.client_id,
-            enable_idempotence=True,
-            acks="all",
-            value_serializer=msgpack.dumps,
-        )
+    async def _get_producer(self):
+        retries = 3
+        for i in range(1, retries + 1):
+            try:
+                return AIOKafkaProducer(
+                    bootstrap_servers=",".join(self.hosts),
+                    client_id=self.client_id,
+                    enable_idempotence=True,
+                    acks="all",
+                    value_serializer=msgpack.dumps,
+                )
+            except Exception as ex:
+                if i == retries:
+                    raise ex
+                await asyncio.sleep(3)
 
-    def _get_consumer(self):
-        return AIOKafkaConsumer(
-            self.topic,
-            bootstrap_servers=",".join(self.hosts),
-            client_id=self.client_id,
-            group_id=self.group_id,
-            value_deserializer=msgpack.unpackb,
-        )
+    async def _get_consumer(self):
+        retries = 3
+        for i in range(1, retries + 1):
+            try:
+                return AIOKafkaConsumer(
+                    self.topic,
+                    bootstrap_servers=",".join(self.hosts),
+                    client_id=self.client_id,
+                    group_id=self.group_id,
+                    value_deserializer=msgpack.unpackb,
+                    auto_offset_reset="earliest",
+                )
+            except GroupCoordinatorNotAvailableError as ex:
+                if i != 2:
+                    logger.error(
+                        f"Retrying connecting consumer since group coordinator not available...({i}/{retries})"
+                    )
+                else:
+                    raise ex
 
-    def _get_admin(self):
+    async def _get_admin(self):
         try:
             from kafka import KafkaAdminClient
 
@@ -207,6 +249,9 @@ class KafkaChannelLayer(BaseChannelLayer):
             raise StopConsumer
         instance = "consumer" if consumer else "admin" if admin else "producer"
         reconnect_task_name = f"_{instance}_reconnect_forever_task"
+        self.dct[reconnect_task_name] += 1
+        if self.dct[reconnect_task_name] > 4:
+            raise Exception()
         if not hasattr(self, reconnect_task_name):
             logger.warning(reconnect_task_name)
             setattr(
@@ -221,8 +266,6 @@ class KafkaChannelLayer(BaseChannelLayer):
             )
 
     async def send(self, channel: str, message: dict) -> None:
-        if importlib.util.find_spec("aafka"):
-            await self.admin
         assert self.valid_channel_name(channel), "Invalid channel name"
         producer = await self.producer
         record = serialize_message(ChannelRecipient(channel), message)
@@ -238,8 +281,6 @@ class KafkaChannelLayer(BaseChannelLayer):
         self._queue.group_discard(group, channel)
 
     async def group_send(self, group: str, message: dict):
-        if importlib.util.find_spec("aafka"):
-            await self.admin
         producer = await self.producer
         assert isinstance(group, str)
         record = serialize_message(GroupRecipient(group), message)
@@ -248,10 +289,9 @@ class KafkaChannelLayer(BaseChannelLayer):
         logger.debug("group sent record %s to %s", record, group)
 
     async def receive(self, channel: str) -> Any:
-        if importlib.util.find_spec("aafka"):
-            await self.admin
         assert self.valid_channel_name(channel), "Invalid channel name"
         logger.warning("receive %s channel", channel)
+        await self.producer
         await self.consumer
         logger.debug("waiting for channel %s", channel)
         msg = await self._queue.get(channel)
@@ -260,13 +300,6 @@ class KafkaChannelLayer(BaseChannelLayer):
 
     async def new_channel(self):
         return self.client_id + str(uuid.uuid1())
-
-    async def flush(self):
-        if not importlib.util.find_spec("aafka"):
-            raise NotImplementedError("Flush is not available without 'flush' feature")
-
-        admin = await self.admin
-        admin.delete_topics([self.topic], timeout_ms=5_000)
 
     async def close(self):
         poll_task = getattr(self, "_poll_new_records_task", None)

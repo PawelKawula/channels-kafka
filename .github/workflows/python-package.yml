@@ -25,15 +25,17 @@ jobs:
       uses: astral-sh/setup-uv@v6
       with:
         python-version: 3.11
+        enable-cache: true
 
     - name: Install the project
       run: uv sync --locked --all-extras --dev
 
     - name: Kafka KRaft
-      uses: PawelKawula/kafka-kraft-action@v1.0.32
+      uses: PawelKawula/kafka-kraft-action@v1.0.42
       with:
         kafka-version: ${{ matrix.kafka-version }}
         kafka-topics: channels_kafka_testtopic,1
+        kafka-cache: true
 
     - name: Run tests
       # For example, using `pytest`
