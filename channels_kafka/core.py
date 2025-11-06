@@ -91,7 +91,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         instance = "producer" if producer else "consumer"
         future_name = f"_{instance}_future"
         connection = None
-        logger.warning("%s instance to be run", instance)
+        logger.info("%s instance to be run", instance)
         while not self._want_close:
             while not self._want_close:
                 try:
@@ -106,7 +106,6 @@ class KafkaChannelLayer(BaseChannelLayer):
                     break
 
                 break
-            logger.warning(connection)
 
             try:
                 retries = 3
@@ -145,9 +144,8 @@ class KafkaChannelLayer(BaseChannelLayer):
             except self.EXPECTED_EXCEPTIONS as ex:
                 try:
                     connection.stop()
-                    connection.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.exception(exc)
                 logger.warning(
                     "Disconnected %s from Kafka: %s. Will reconnect.", instance, str(ex)
                 )
@@ -226,7 +224,6 @@ class KafkaChannelLayer(BaseChannelLayer):
         if self.dct[reconnect_task_name] > 4:
             raise Exception()
         if not hasattr(self, reconnect_task_name):
-            logger.warning(reconnect_task_name)
             setattr(
                 self,
                 reconnect_task_name,
@@ -254,9 +251,11 @@ class KafkaChannelLayer(BaseChannelLayer):
         await self.consumer
 
     async def group_add(self, group, channel):
+        logger.debug("channel %s added to group %s", channel, group)
         self._queue.group_add(group, channel)
 
     async def group_discard(self, group, channel):
+        logger.debug("channel %s discarded from group %s", channel, group)
         self._queue.group_discard(group, channel)
 
     async def group_send(self, group: str, message: dict):
@@ -270,7 +269,7 @@ class KafkaChannelLayer(BaseChannelLayer):
 
     async def receive(self, channel: str) -> Any:
         assert self.valid_channel_name(channel), "Invalid channel name"
-        logger.warning("receive %s channel", channel)
+        logger.debug("receive %s channel", channel)
         await self.producer
         await self.consumer
         logger.debug("waiting for channel %s", channel)
@@ -299,6 +298,7 @@ class KafkaChannelLayer(BaseChannelLayer):
 
     async def close(self):
         poll_task = getattr(self, "_poll_new_records_task", None)
+        logger.info("closing kafka channel layer")
         self._want_close = True
         if poll_task:
             poll_task.cancel()

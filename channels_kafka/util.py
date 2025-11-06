@@ -29,7 +29,6 @@ def serialize_message(recipient: Recipient, message: dict):
 
 
 def deserialize_message(message: dict):
-    print(message)
     group = message.pop("__asgi_group__", None)
     channel = message.pop("__asgi_channel__", None)
     assert sum(map(bool, (channel, group))) == 1
