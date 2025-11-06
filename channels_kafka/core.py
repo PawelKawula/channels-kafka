@@ -241,7 +241,7 @@ class KafkaChannelLayer(BaseChannelLayer):
             setattr(self, expire_task_name, expire_task)
 
     async def send(self, channel: str, message: dict) -> None:
-        assert self.valid_channel_name(channel), "Invalid channel name"
+        assert self.require_valid_channel_name(channel), "Invalid channel name"
         producer = await self.producer
         record = serialize_message(ChannelRecipient(channel), message)
         assert isinstance(channel, str)
@@ -251,6 +251,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         await self.consumer
 
     async def group_add(self, group, channel):
+        assert self.require_valid_channel_name(channel), "Invalid channel name"
         logger.debug("channel %s added to group %s", channel, group)
         self._queue.group_add(group, channel)
 
@@ -268,7 +269,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         logger.debug("group sent record %s to %s", record, group)
 
     async def receive(self, channel: str) -> Any:
-        assert self.valid_channel_name(channel), "Invalid channel name"
+        assert self.require_valid_channel_name(channel), "Invalid channel name"
         logger.debug("receive %s channel", channel)
         await self.producer
         await self.consumer
