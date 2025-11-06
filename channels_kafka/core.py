@@ -55,7 +55,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         client_id: str = "asgi",
         group_id: str = "django_channels_group",
         topic: str = "django_channels",
-        max_size: int = 100,
+        local_capacity: int = 100,
         local_expiry=5,
         timeout=1,
     ):
@@ -71,7 +71,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         self.client_id = client_id
         self.group_id = group_id
         self.topic = topic
-        self._queue = MultiQueue(max_size)
+        self._queue = MultiQueue(local_capacity)
         self.timeout = timeout
         self.local_expiry = local_expiry
 
