@@ -47,7 +47,7 @@ async def _poll_new_records(
 
 
 class KafkaChannelLayer(BaseChannelLayer):
-    extensions = ["groups"]
+    extensions = ["groups", "flush"]
 
     def __init__(
         self,
@@ -314,6 +314,22 @@ class KafkaChannelLayer(BaseChannelLayer):
         msg = await self._queue.get(channel)
         logger.debug("received %s for channel %s", msg, channel)
         return msg
+
+    async def flush(self):
+        if self._producer_future.done():
+            producer = await self.producer
+            try:
+                async with asyncio.timeout(5):
+                    await producer.flush()
+            except asyncio.TimeoutError:
+                logger.error("Producer couldn't flush all messages in time")
+        if self._consumer_future.done():
+            consumer = await self.consumer
+            try:
+                async with asyncio.timeout(5):
+                    await consumer.seek_to_end()
+            except asyncio.TimeoutError:
+                logger.error("Consumer couldn't seek to end of the log in time")
 
     async def new_channel(self):
         return self.client_id + str(uuid.uuid1())
