@@ -149,9 +149,8 @@ class KafkaChannelLayer(BaseChannelLayer):
                 logger.warning(
                     "Disconnected %s from Kafka: %s. Will reconnect.", instance, str(ex)
                 )
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 continue
-
         try:
             await self.close()
         except self.EXPECTED_EXCEPTIONS:
@@ -298,9 +297,9 @@ class KafkaChannelLayer(BaseChannelLayer):
         return self.client_id + str(uuid.uuid1())
 
     async def close(self):
-        poll_task = getattr(self, "_poll_new_records_task", None)
         logger.info("closing kafka channel layer")
         self._want_close = True
+        poll_task = getattr(self, "_poll_new_records_task", None)
         if poll_task:
             poll_task.cancel()
         expire_task = getattr(self, "_expire_task", None)
