@@ -79,17 +79,16 @@ class KafkaChannelLayer(BaseChannelLayer):
         self._polling_error = asyncio.Event()
         self._want_close = False
 
-        self._producer_future, self._consumer_future, self._admin_future = (
+        self._producer_future, self._consumer_future = (
             asyncio.Future[AIOKafkaProducer](),
             asyncio.Future[AIOKafkaConsumer](),
-            asyncio.Future(),
         )
 
         self.EXPECTED_EXCEPTIONS = (KafkaTimeoutError, KafkaConnectionError, OSError)
 
-    async def _reconnect_forever(self, *, producer=False, consumer=False, admin=False):
-        assert sum((producer, consumer, admin)) == 1
-        instance = "producer" if producer else ("consumer" if consumer else "admin")
+    async def _reconnect_forever(self, *, producer=False, consumer=False):
+        assert sum((producer, consumer)) == 1
+        instance = "producer" if producer else "consumer"
         future_name = f"_{instance}_future"
         connection = None
         logger.warning("%s instance to be run", instance)
@@ -103,21 +102,6 @@ class KafkaChannelLayer(BaseChannelLayer):
                     )
                     await asyncio.sleep(1)
                     continue
-                if admin:
-                    try:
-                        from kafka.admin import NewTopic
-
-                        logger.error(connection.list_topics())
-                        if self.topic not in connection.list_topics():
-                            connection.create_topics(
-                                [NewTopic(self.topic, 1, 1)], validate_only=True
-                            )
-                    except self.EXPECTED_EXCEPTIONS:
-                        logger.warning("Dropped connection to admin at %s", self.hosts)
-                        connection = None
-                        await asyncio.sleep(1)
-                        continue
-
                 if self._want_close:
                     break
 
@@ -125,24 +109,23 @@ class KafkaChannelLayer(BaseChannelLayer):
             logger.warning(connection)
 
             try:
-                if not admin:
-                    retries = 3
-                    for i in range(1, retries + 1):
-                        try:
-                            await connection.start()
-                            future = getattr(self, future_name)
-                            if not future.done():
-                                future.set_result(connection)
-                            logger.debug("%s connected to Kafka", instance)
-                            break
-                        except GroupCoordinatorNotAvailableError:
-                            if i != 2:
-                                logger.error(
-                                    f"Retrying connecting consumer since group coordinator not available...({i}/{retries})"
-                                )
-                                await asyncio.sleep(2)
-                            else:
-                                continue
+                retries = 3
+                for i in range(1, retries + 1):
+                    try:
+                        await connection.start()
+                        future = getattr(self, future_name)
+                        if not future.done():
+                            future.set_result(connection)
+                        logger.debug("%s connected to Kafka", instance)
+                        break
+                    except GroupCoordinatorNotAvailableError:
+                        if i != 2:
+                            logger.error(
+                                f"Retrying connecting consumer since group coordinator not available...({i}/{retries})"
+                            )
+                            await asyncio.sleep(2)
+                        else:
+                            continue
                 if consumer:
                     await _poll_new_records(
                         await self.consumer,
@@ -219,17 +202,6 @@ class KafkaChannelLayer(BaseChannelLayer):
                 else:
                     raise ex
 
-    async def _get_admin(self):
-        try:
-            from kafka import KafkaAdminClient
-
-            return KafkaAdminClient(
-                bootstrap_servers=self.hosts,
-                client_id=self.client_id,
-            )
-        except ModuleNotFoundError:
-            raise NotImplementedError("Admin is not available without 'flush' feature")
-
     @property
     async def producer(self):
         if self._producer_future.done():
@@ -244,18 +216,11 @@ class KafkaChannelLayer(BaseChannelLayer):
         self.kafka_connection(consumer=True)
         return await self._consumer_future
 
-    @property
-    async def admin(self):
-        if self._admin_future.done():
-            return self._admin_future.result()
-        self.kafka_connection(admin=True)
-        return await self._admin_future
-
-    def kafka_connection(self, *, consumer=False, producer=False, admin=False):
-        assert sum([consumer, producer, admin]) == 1
+    def kafka_connection(self, *, consumer=False, producer=False):
+        assert sum([consumer, producer]) == 1
         if self._want_close:
             raise StopConsumer
-        instance = "consumer" if consumer else "admin" if admin else "producer"
+        instance = "consumer" if consumer else "producer"
         reconnect_task_name = f"_{instance}_reconnect_forever_task"
         self.dct[reconnect_task_name] += 1
         if self.dct[reconnect_task_name] > 4:
@@ -266,9 +231,7 @@ class KafkaChannelLayer(BaseChannelLayer):
                 self,
                 reconnect_task_name,
                 asyncio.create_task(
-                    self._reconnect_forever(
-                        producer=producer, consumer=consumer, admin=admin
-                    ),
+                    self._reconnect_forever(producer=producer, consumer=consumer),
                     name=f"Create {instance} task",
                 ),
             )
