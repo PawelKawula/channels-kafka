@@ -42,7 +42,7 @@ class _Channel:
     def remove_older_than(self, expire_time: float):
         cleaned = False
 
-        while self._queue.qsize() and self._queue._queue[0].time > expire_time:
+        while self._queue.qsize() and self._queue._queue[0].time < expire_time:
             message = self._queue._queue.popleft()
             message.mark_delivered()
             cleaned = True
@@ -95,7 +95,7 @@ class MultiQueue:
 
     def _build_big_queues_str(self):
         queues = [(name, len(q._queue._queue)) for name, q in self.channels.items()]
-        queues = queues.sort(lambda q: q[1], reverse=True)
+        queues.sort(key=lambda q: q[1], reverse=True)
         return ", ".join(f"{name}: {q}" for name, q in queues[:3])
 
     def log_backpressure(self):
@@ -167,7 +167,7 @@ class MultiQueue:
             )
 
             now = loop.time()
-            if oldest_message_time < now + local_expiry:
+            if now - local_expiry < oldest_message_time:
                 await asyncio.wait(
                     {closed_task}, timeout=oldest_message_time - now + local_expiry
                 )

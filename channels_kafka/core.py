@@ -27,17 +27,19 @@ logger = logging.getLogger(__name__)
 
 async def _poll_new_records(
     consumer: AIOKafkaConsumer,
-    timeout: int,
+    timeout: float,
     polling_error: asyncio.Event,
     queue: MultiQueue,
 ):
     try:
         while True:
-            time = asyncio.get_running_loop().time()
-            async for record in consumer:
-                recipient, data = deserialize_message(record.value)
-                logger.debug("%s received data: %s", recipient, data)
-                queue.put_nowait(recipient, data, time, lambda: None)
+            partitions = await consumer.getmany(timeout_ms=int(timeout * 1000))
+            for records in partitions.values():
+                for record in records:
+                    recipient, data = deserialize_message(record.value)
+                    logger.debug("%s received data: %s", recipient, data)
+                    time = asyncio.get_running_loop().time()
+                    queue.put_nowait(recipient, data, time, lambda: None)
     except Exception as ex:
         logger.exception(ex)
         polling_error.set()
@@ -54,6 +56,8 @@ class KafkaChannelLayer(BaseChannelLayer):
         group_id: str = "django_channels_group",
         topic: str = "django_channels",
         max_size: int = 100,
+        local_expiry=5,
+        timeout=1,
     ):
         try:
             asyncio.get_running_loop()
@@ -68,7 +72,8 @@ class KafkaChannelLayer(BaseChannelLayer):
         self.group_id = group_id
         self.topic = topic
         self._queue = MultiQueue(max_size)
-        self.timeout = 1000
+        self.timeout = timeout
+        self.local_expiry = local_expiry
 
         self._closed = asyncio.Event()
         self._polling_error = asyncio.Event()
@@ -185,6 +190,7 @@ class KafkaChannelLayer(BaseChannelLayer):
                     enable_idempotence=True,
                     acks="all",
                     value_serializer=msgpack.dumps,
+                    linger_ms=50,
                 )
             except Exception as ex:
                 if i == retries:
@@ -202,6 +208,8 @@ class KafkaChannelLayer(BaseChannelLayer):
                     group_id=self.group_id,
                     value_deserializer=msgpack.unpackb,
                     auto_offset_reset="earliest",
+                    fetch_min_bytes=1,
+                    fetch_max_wait_ms=50,
                 )
             except GroupCoordinatorNotAvailableError as ex:
                 if i != 2:
@@ -264,6 +272,13 @@ class KafkaChannelLayer(BaseChannelLayer):
                     name=f"Create {instance} task",
                 ),
             )
+        expire_task_name = "_expire_task"
+        if not hasattr(self, expire_task_name):
+            expire_task = asyncio.create_task(
+                self._queue.expire_until_closed(local_expiry=self.local_expiry)
+            )
+            logger.warning("created task expire locally")
+            setattr(self, expire_task_name, expire_task)
 
     async def send(self, channel: str, message: dict) -> None:
         assert self.valid_channel_name(channel), "Invalid channel name"
@@ -273,6 +288,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         logger.debug("channel sending record %s to %s", record, channel)
         await producer.send_and_wait(self.topic, record)
         logger.debug("channel sent record %s to %s", record, channel)
+        await self.consumer
 
     async def group_add(self, group, channel):
         self._queue.group_add(group, channel)
@@ -284,6 +300,7 @@ class KafkaChannelLayer(BaseChannelLayer):
         producer = await self.producer
         assert isinstance(group, str)
         record = serialize_message(GroupRecipient(group), message)
+        await self.consumer
         logger.debug("group sending record %s to %s", record, group)
         await producer.send_and_wait(self.topic, record)
         logger.debug("group sent record %s to %s", record, group)
@@ -306,6 +323,9 @@ class KafkaChannelLayer(BaseChannelLayer):
         self._want_close = True
         if poll_task:
             poll_task.cancel()
+        expire_task = getattr(self, "_expire_task", None)
+        if expire_task:
+            expire_task.cancel()
         self._closed.set()
         for name in ("producer", "consumer"):
             instance: asyncio.Future[Union[AIOKafkaProducer, AIOKafkaConsumer]] = (
@@ -313,9 +333,3 @@ class KafkaChannelLayer(BaseChannelLayer):
             )
             if instance and instance.done():
                 await instance.result().stop()
-        try:
-            admin = self._admin_future
-            if admin and admin.done():
-                admin.result().close()
-        except ModuleNotFoundError:
-            pass
