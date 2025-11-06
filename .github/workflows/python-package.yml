@@ -31,7 +31,7 @@ jobs:
       run: uv sync --locked --all-extras --dev
 
     - name: Kafka KRaft
-      uses: PawelKawula/kafka-kraft-action@v1.0.42
+      uses: PawelKawula/kafka-kraft-action@v1.0.43
       with:
         kafka-version: ${{ matrix.kafka-version }}
         kafka-topics: channels_kafka_testtopic,1
