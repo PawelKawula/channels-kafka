@@ -30,4 +30,4 @@ aiokafka = { git = "https://github.com/PawelKawula/aiokafka" }
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
-addopts = "--log-format='%(asctime)s - %(name)s - %(levelname)s - %(message)s' --log-date-format='%m/%d/%Y %H:%M:%S.%f'"
+addopts = "--log-format='%(asctime)s - %(name)s:%(lineno)s - %(levelname)s - %(message)s' --log-date-format='%m/%d/%Y %H:%M:%S.%f'"
