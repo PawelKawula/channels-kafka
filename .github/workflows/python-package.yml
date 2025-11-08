@@ -5,13 +5,12 @@ name: Python package
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -19,26 +18,26 @@ jobs:
         kafka-version: ["3.7.0"]
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v6
-      with:
-        python-version: 3.11
-        enable-cache: true
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: 3.11
+          enable-cache: true
 
-    - name: Install the project
-      run: uv sync --locked --all-extras --dev
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
 
-    - name: Kafka KRaft
-      uses: PawelKawula/kafka-kraft-action@v1.0.43
-      with:
-        kafka-version: ${{ matrix.kafka-version }}
-        kafka-topics: channels_kafka_testtopic,1
-        kafka-cache: true
+      - name: Kafka KRaft
+        uses: PawelKawula/kafka-kraft-action@v1.0.44
+        with:
+          kafka-version: ${{ matrix.kafka-version }}
+          kafka-topics: channels_kafka_testtopic,1
+          kafka-cache: true
 
-    - name: Run tests
-      # For example, using `pytest`
-      run: uv run pytest tests
-      env:
-        CHANNELS_KAFKA_TEST_BOOTSTRAP_SERVERS: ${{ env.kafka_runner_address }}:9093
+      - name: Run tests
+        # For example, using `pytest`
+        run: uv run pytest tests
+        env:
+          CHANNELS_KAFKA_TEST_BOOTSTRAP_SERVERS: ${{ env.kafka_runner_address }}:9093
