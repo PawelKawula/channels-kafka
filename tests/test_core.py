@@ -22,6 +22,14 @@ TIMEOUT = int(os.getenv("CHANNELS_KAFKA_TEST_TIMEOUT", 15))
 logger = logging.getLogger(__name__)
 
 
+async def wait_for_output_in_logging(caplog, output, timeout=3):
+    async with asyncio.timeout(timeout):
+        while True:
+            if output in caplog.text:
+                return
+            await asyncio.sleep(0.5)
+
+
 @pytest.fixture
 def asyncio_default_fixture_loop_scope():
     return "session"
@@ -227,14 +235,9 @@ async def test_send_expire_locally(layer: core.KafkaChannelLayer, caplog):
     # local_capacity=1: when we expire, we must ack so RabbitMQ can send
     # another message.
     await layer.send("x!y", {"type": "test.message1"})
-    logger.warning("sleeping...")
-    await asyncio.sleep(10)  # plenty of time; message.1 should expire
-    logger.warning("slept, should be expired")
+    await wait_for_output_in_logging(caplog, "expired locally", 10)
     await layer.send("x!y", {"type": "test.message2"})
-    logger.warning("sent second")
-    # assert (await layer.receive("x!y"))["type"] == "test.message1"
     assert (await layer.receive("x!y"))["type"] == "test.message2"
-    assert "expired locally" in caplog.text
 
 
 @ASYNC_TEST
