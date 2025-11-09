@@ -33,13 +33,11 @@ async def _poll_new_records(
 ):
     try:
         while True:
-            partitions = await consumer.getmany(timeout_ms=int(timeout * 1000))
-            for records in partitions.values():
-                for record in records:
-                    recipient, data = deserialize_message(record.value)
-                    logger.debug("%s received data: %s", recipient, data)
-                    time = asyncio.get_running_loop().time()
-                    queue.put_nowait(recipient, data, time, lambda: None)
+            async for record in consumer:
+                recipient, data = deserialize_message(record.value)
+                logger.debug("%s received data: %s", recipient, data)
+                time = asyncio.get_running_loop().time()
+                queue.put_nowait(recipient, data, time, lambda: None)
     except Exception as ex:
         logger.exception(ex)
         polling_error.set()
