@@ -41,3 +41,4 @@ jobs:
         run: uv run pytest tests
         env:
           CHANNELS_KAFKA_TEST_BOOTSTRAP_SERVERS: ${{ env.kafka_runner_address }}:9093
+          CHANNELS_KAFKA_TEST_TIMEOUT: 30
