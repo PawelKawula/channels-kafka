@@ -7,6 +7,7 @@ from typing import Any, Union
 import msgpack
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.errors import (
+    ConsumerStoppedError,
     GroupCoordinatorNotAvailableError,
     KafkaConnectionError,
     KafkaTimeoutError,
@@ -37,7 +38,16 @@ async def _poll_new_records(
                 recipient, data = deserialize_message(record.value)
                 logger.debug("%s received data: %s", recipient, data)
                 time = asyncio.get_running_loop().time()
-                queue.put_nowait(recipient, data, time, lambda: None)
+                try:
+                    queue.put_nowait(recipient, data, time, lambda: None)
+                except asyncio.QueueFull:
+                    logger.warning(
+                        "Message %s delivered but couldn't be consumed since recipient %s reached max size",
+                        data,
+                        recipient,
+                    )
+    except (ConsumerStoppedError, KafkaConnectionError, KafkaTimeoutError) as _ex:
+        pass
     except Exception as ex:
         logger.exception(ex)
         polling_error.set()
