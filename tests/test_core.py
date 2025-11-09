@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 import threading
@@ -16,8 +17,10 @@ BOOTSTRAP_SERVERS: List[str] = os.getenv(
 CLIENT_ID = os.getenv("CHANNELS_KAFKA_TEST_CLIENT_ID", "channels_kafka_testclient")
 GROUP_ID = os.getenv("CHANNELS_KAFKA_TEST_GROUP_ID", "channels_kafka_testgroup")
 TOPIC_ID = os.getenv("CHANNELS_KAFKA_TEST_TOPIC", "channels_kafka_testtopic")
-MAX_SIZE = int(os.getenv("CHANNELS_KAFKA_TEST_MAX_SIZE", 100))
-TIMEOUT = int(os.getenv("CHANNELS_KAFKA_TEST_TIMEOUT", 15))
+LOCAL_CAPACITY = int(os.getenv("CHANNELS_KAFKA_LOCAL_CAPACITY", 100))
+LOCAL_EXPIRY = int(os.getenv("CHANNELS_KAFKA_LOCAL_EXPIRY", 1))
+LOG_RETENTION = float(os.getenv("CHANNELS_LOG_RETENTION", 10))
+TEST_TIMEOUT = int(os.getenv("CHANNELS_KAFKA_TEST_TIMEOUT", 15))
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,7 @@ async def flush_channel_layer(layer):
         CLIENT_ID,
         GROUP_ID,
         TOPIC_ID,
-        MAX_SIZE,
+        LOCAL_CAPACITY,
     )
     yield None
     await layer.flush()
@@ -50,22 +53,25 @@ async def flush_channel_layer(layer):
     await layer.close()
 
 
-@pytest_asyncio.fixture
-async def layer():
+async def layer(**kwargs):
     layer = None
     try:
-        layer = core.KafkaChannelLayer(
-            BOOTSTRAP_SERVERS,
-            CLIENT_ID,
-            GROUP_ID,
-            TOPIC_ID,
-            MAX_SIZE,
-        )
+        default_kwargs = {
+            "hosts": BOOTSTRAP_SERVERS,
+            "client_id": CLIENT_ID,
+            "group_id": GROUP_ID,
+            "topic": TOPIC_ID,
+            "local_capacity": LOCAL_CAPACITY,
+            "local_expiry": LOCAL_EXPIRY,
+            "timeout": LOG_RETENTION,
+        }
+        kwargs = default_kwargs | kwargs
+        layer = core.KafkaChannelLayer(**kwargs)
         yield layer
     finally:
         if layer:
             try:
-                async with asyncio.timeout(TIMEOUT):
+                async with asyncio.timeout(TEST_TIMEOUT):
                     await layer.flush()
                     await layer.close()
             except:
@@ -75,8 +81,12 @@ async def layer():
                 raise
 
 
+open_layer = contextlib.asynccontextmanager(layer)
+layer = pytest_asyncio.fixture(layer)
+
+
 def ASYNC_TEST(fn, timeout=None):
-    return pytest.mark.timeout(timeout or TIMEOUT)(pytest.mark.asyncio(fn))
+    return pytest.mark.timeout(timeout or TEST_TIMEOUT)(pytest.mark.asyncio(fn))
 
 
 @ASYNC_TEST
@@ -212,28 +222,18 @@ async def test_send_capacity(layer: core.KafkaChannelLayer, caplog):
     assert (await layer.receive("x!y"))["type"] == "test.message4"
 
 
-@pytest.mark.skip
 @ASYNC_TEST
 async def test_send_expire_remotely(layer: core.KafkaChannelLayer):
-    # expiry 80ms: long enough for us to receive all messages; short enough to
-    # keep the test fast.
-    await layer.send("x!y", {"type": "test.message1"})  # one local, unacked
-    await layer.send("x!y", {"type": "test.message2"})  # remote, queued
-    await asyncio.sleep(0.09)  # test.message2 should expire
-    await layer.send("x!y", {"type": "test.message3"})  # remote
-    assert (await layer.receive("x!y"))["type"] == "test.message1"
-    # test.message2 should disappear entirely
-    assert (await layer.receive("x!y"))["type"] == "test.message3"
+    async with open_layer(local_capacity=1, local_expiry=LOG_RETENTION * 2) as layer:
+        await layer.send("x!y", {"type": "test.message1"})  # one local, unacked
+        await layer.send("x!y", {"type": "test.message2"})  # remote, queued
+        assert (await layer.receive("x!y"))["type"] == "test.message1"
+        await layer.send("x!y", {"type": "test.message3"})  # remote
+        assert (await layer.receive("x!y"))["type"] == "test.message3"
 
 
-# @pytest.mark.xfail(reason="Batching in kafka")
 @ASYNC_TEST
 async def test_send_expire_locally(layer: core.KafkaChannelLayer, caplog):
-    # expiry 20ms: long enough that we can deliver one message but expire
-    # another.
-    #
-    # local_capacity=1: when we expire, we must ack so RabbitMQ can send
-    # another message.
     await layer.send("x!y", {"type": "test.message1"})
     await wait_for_output_in_logging(caplog, "expired locally", 10)
     await layer.send("x!y", {"type": "test.message2"})
