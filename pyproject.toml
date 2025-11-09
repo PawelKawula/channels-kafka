@@ -5,7 +5,7 @@ description = "Kafka Channels backend"
 readme = "README.md"
 license = "MIT"
 
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "aiokafka",
     "channels>=3,<5",
