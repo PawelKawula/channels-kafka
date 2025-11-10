@@ -105,8 +105,11 @@ CHANNEL_LAYERS = {
 
 As for kafka broker, you would need to:
 
+- create desired topic
 - set **offsets.topic.replication.factor** to **1** since channels documentation says you should be ok with some messages not being delivered to increase throughput
 - set **max.in.flight.requests.per.connection** to **1** to ensure that messages are delivered in order
+
+Both settings can be scoped only to created topic aswell
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
