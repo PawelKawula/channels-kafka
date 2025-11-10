@@ -59,8 +59,6 @@ Provides channel layer for django channels using kafka
 - [![Django][Django]][Django-url]
 - [![Kafka][Kafka]][Kafka-url]
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
 ## Getting Started
 
 To work with django channels using this channel layer you will need to have working kafka cluster. As of time of writing,
