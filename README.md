@@ -13,7 +13,7 @@
   <h3 align="center">channels-kafka</h3>
 
   <p align="center">
-    A Django Channels channel layer that uses Kafka as its backing store.
+    A **Django Channels** channel layer that uses **Kafka** as its backing store.
     <br />
     <a href="https://github.com/PawelKawula/channels-kafka"><strong>Explore the docs »</strong></a>
     <br />
@@ -50,7 +50,7 @@
 
 ## About The Project
 
-Provides channel layer for django channels using kafka
+Provides channel layer for **django channels** using **kafka**.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -62,12 +62,12 @@ Provides channel layer for django channels using kafka
 ## Getting Started
 
 To work with django channels using this channel layer you will need to have working kafka cluster. As of time of writing,
-this library was only tested on Kafka with Kraft Mode.
+this library was only tested on **Kafka with Kraft Mode**.
 
 ### Prerequisites
 
-channels-kafka should be able to be installed using any package manager of your choice, although ci tests
-use uv
+**channels-kafka** should be able to be installed using any package manager of your choice, although ci tests
+use **uv**.
 
 ### Installation
 
@@ -85,7 +85,7 @@ use uv
 ## Usage
 
 Assuming that you already have a working django-channels app using any other layer, the only thing you would need to do in your django
-code is to change CHANNEL_LAYERS setting in your django to use this backend with all releavant configuration.
+code is to change **CHANNEL_LAYERS** setting in your django to use this backend with all releavant configuration.
 
 ```python
 CHANNEL_LAYERS = {
@@ -107,7 +107,7 @@ As for kafka broker, you would need to:
 - set **offsets.topic.replication.factor** to **1** since channels documentation says you should be ok with some messages not being delivered to increase throughput
 - set **max.in.flight.requests.per.connection** to **1** to ensure that messages are delivered in order
 
-Both settings can be scoped only to created topic aswell
+Both settings can be scoped only to created topic aswell.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -134,7 +134,7 @@ Don't forget to give the project a star! Thanks again!
 
 ## Testing
 
-Check all caps constants in https://github.com/PawelKawula/channels-kafka/blob/master/tests/test_core.py to see which env variables you need to provide to run tests using your kafka cluster and then run
+Check all caps constants in https://github.com/PawelKawula/channels-kafka/blob/master/tests/test_core.py to see which env variables you need to provide to run tests using your kafka cluster and then run.
 
 ```sh
   pytest
