@@ -126,6 +126,12 @@ Don't forget to give the project a star! Thanks again!
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
+### Top contributors:
+
+<a href="https://github.com/PawelKawula/channels-kafka/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=PawelKawula/channels-kafka" alt="contrib.rocks image" />
+</a>
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Testing
@@ -137,12 +143,6 @@ Check all caps constants in https://github.com/PawelKawula/channels-kafka/blob/m
 ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-### Top contributors:
-
-<a href="https://github.com/PawelKawula/channels-kafka/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=PawelKawula/channels-kafka" alt="contrib.rocks image" />
-</a>
 
 ## License
 
