@@ -12,10 +12,22 @@ dependencies = [
     "msgpack>=1.1.0",
 ]
 license-files = ["LICEN[CS]E*"]
+keywords = ["kafka", "channels"]
+authors = [
+    {name = "Paweł Kawula", email = "pawel.kawula@proton.me"},
+]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
 ]
+
+[project.urls]
+Homepage = "https://github.com/PawelKawula/channels-kafka"
+Repository = "https://github.com/PawelKawula/channels-kafka"
 
 [dependency-groups]
 dev = [
