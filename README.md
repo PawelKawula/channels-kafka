@@ -94,7 +94,10 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_kafka.core.KafkaChannelLayer",
         "CONFIG": {
-            "hosts": ["localhost:9092"],
+            "hosts": os.getenv("KAFKA_HOSTS", "localhost:9092").split(","),
+            "client_id": os.getenv("KAFKA_CLIENT_ID", socket.gethostname()),
+            "topic": os.getenv("KAFKA_CLIENT_ID", "channels-kafka"),
+            "group_id": os.getenv("KAFKA_GROUP_ID", "channels-kafka-group"),
         },
     },
 }
