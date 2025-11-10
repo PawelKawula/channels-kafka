@@ -13,7 +13,7 @@
   <h3 align="center">channels-kafka</h3>
 
   <p align="center">
-    A **Django Channels** channel layer that uses **Kafka** as its backing store.
+    A <b>Django Channels</b> channel layer that uses <b>Kafka</b> as its backing store.
     <br />
     <a href="https://github.com/PawelKawula/channels-kafka"><strong>Explore the docs »</strong></a>
     <br />
