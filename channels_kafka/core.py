@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from collections import defaultdict
-from typing import Any, Union
+from typing import Any
 
 import msgpack
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -291,14 +291,14 @@ class KafkaChannelLayer(BaseChannelLayer):
             try:
                 async with asyncio.timeout(5):
                     await producer.flush()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error("Producer couldn't flush all messages in time")
         if self._consumer_future.done():
             consumer = await self.consumer
             try:
                 async with asyncio.timeout(5):
                     await consumer.seek_to_end()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error("Consumer couldn't seek to end of the log in time")
 
     async def new_channel(self):
@@ -315,8 +315,8 @@ class KafkaChannelLayer(BaseChannelLayer):
             expire_task.cancel()
         self._closed.set()
         for name in ("producer", "consumer"):
-            instance: asyncio.Future[Union[AIOKafkaProducer, AIOKafkaConsumer]] = (
-                getattr(self, f"_{name}_future")
+            instance: asyncio.Future[AIOKafkaProducer | AIOKafkaConsumer] = getattr(
+                self, f"_{name}_future"
             )
             if instance and instance.done():
                 await instance.result().stop()

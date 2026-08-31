@@ -1,4 +1,4 @@
-from typing import Any, Dict, NamedTuple, Union
+from typing import Any, NamedTuple, Union
 
 
 class ChannelRecipient(NamedTuple):
@@ -14,7 +14,7 @@ Recipient = Union[ChannelRecipient, GroupRecipient]
 
 class DeserializeResult(NamedTuple):
     recipient: Recipient
-    data: Dict[str, Any]
+    data: dict[str, Any]
 
 
 def serialize_message(recipient: Recipient, message: dict):

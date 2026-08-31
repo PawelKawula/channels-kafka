@@ -1,8 +1,9 @@
 import asyncio
 from asyncio import Queue
+from collections.abc import Callable
 from dataclasses import dataclass
 from logging import getLogger
-from typing import Any, Callable, Set
+from typing import Any
 
 from channels.exceptions import StopConsumer
 
@@ -69,7 +70,7 @@ class MultiQueue:
     def __init__(self, max_size: int):
         self.max_size = max_size
         self.channels: dict[str, _Channel] = {}
-        self._local_groups: dict[str, Set[str]] = {}
+        self._local_groups: dict[str, set[str]] = {}
         self.n_messages = 0
         self._non_empty = asyncio.Event()
         self._last_logged_backpressure = 0
