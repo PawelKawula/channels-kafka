@@ -3,7 +3,6 @@ import contextlib
 import logging
 import os
 import threading
-from typing import List
 
 import pytest
 import pytest_asyncio
@@ -11,7 +10,7 @@ from channels.exceptions import ChannelFull
 
 from channels_kafka import core
 
-BOOTSTRAP_SERVERS: List[str] = os.getenv(
+BOOTSTRAP_SERVERS: list[str] = os.getenv(
     "CHANNELS_KAFKA_TEST_BOOTSTRAP_SERVERS", "localhost:9092"
 ).split(",")
 CLIENT_ID = os.getenv("CHANNELS_KAFKA_TEST_CLIENT_ID", "channels_kafka_testclient")
